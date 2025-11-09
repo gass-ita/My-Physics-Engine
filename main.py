@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 # --- CONFIG ---
 WIDTH, HEIGHT = 800, 600
 FPS_RENDER = 60
-DT_PHYSICS = 1/2000  # passo fisico (10 ms)
+DT_PHYSICS = 1/150  # passo fisico (10 ms)
 PX_PER_METER = 100.0  # 100 pixel = 1 metro  ### SCALA ###
 FRICTION_AIR = 0  # coefficiente di attrito dell'aria
 DEBUG_DRAWING = False  # disegna informazioni di debug
@@ -357,17 +357,24 @@ def main():
 
     force_fields = [lambda p: np.array([0.0, 9.81]) * p.mass]
     
-    p01 = Particle(pos_m=(3.0, 0.5), vel_m=(0.0, 0.0), static=True)
-    p02 = Particle(pos_m=(5.0, 0.5), vel_m=(0.0, 0.0), static=True)
-    p1 = Particle(pos_m=(4.0, 1.0), vel_m=(0.0, 0.0), static=False, force_fields=force_fields)
+    # fai un cubo composto da 9  palline 
+    particles = [
+        Particle(pos_m=(3.0 + (i%3)*0.60, 1.0 + (i//3)*0.60), vel_m=(0.0, 10.0), radius_m=0.06, color=(255,100,100), mass=0.5, static=False, force_fields=force_fields)
+        for i in range(9)
+        
+    ]
+    # connettili tutti insieme
+    springs = [
+        SpringConstraint(particles[i], particles[j], k=200.0)
+        for i in range(len(particles))
+        for j in range(i+1, len(particles))
+    ]
+    dumpers = [
+        DamperConstraint(particles[i], particles[j], beta=-0.01)
+        for i in range(len(particles))
+        for j in range(i+1, len(particles))
 
-    s1 = SpringConstraint(p01, p1, k=50.0, rest_length=1.0)
-    s2 = SpringConstraint(p02, p1, k=50.0, rest_length=1.0)
-    d1 = DamperConstraint(p01, p1, beta=-0.9)
-    d2 = DamperConstraint(p02, p1, beta=-0.9)
-    particles = [p01, p02, p1]
-    springs = [s1, s2]
-    dumpers = [d1, d2]
+    ]
 
     # Crea vincoli ai bordi (un rettangolo di 7x5 m)
     static_constraints = [
@@ -407,7 +414,7 @@ def main():
                 if event.key == pygame.K_SPACE:
                     for p in particles:
                         print( f"Particella at pos {p.pos}, vel {p.vel}" )
-                        p.apply_force(np.array([10.0, 0.0]), time=1)  # spingi verso l'alto la particella rossa
+                        p.apply_force(np.array([3.0, 0.0]), time=1) 
                 if event.key == pygame.K_TAB:
                     global DEBUG_DRAWING
                     DEBUG_DRAWING = not DEBUG_DRAWING
@@ -439,6 +446,7 @@ def main():
                 p.update(DT_PHYSICS)
                 
             # 4. Gestisci collisioni (vincoli statici)
+            
             for c in static_constraints:
                 for p in particles:
                     c.handle_collision(p)
@@ -454,9 +462,10 @@ def main():
         # Disegna tutti gli oggetti
         for obj in all_objects_to_draw:
             obj.draw(screen)
+            pass
 
         
-        draw_force_fields(screen, force_fields)
+        # draw_force_fields(screen, force_fields)
 
         # Mostra il centro di massa del sistema (in pixel)
         for group in center_mass:
