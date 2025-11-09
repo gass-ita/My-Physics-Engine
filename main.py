@@ -494,6 +494,12 @@ def main():
         screen.blit(text3, (10, 50))
         screen.blit(text, (10, 10))
 
+        # --- MOSTRA POSIZIONE DEL MOUSE ---
+        mouse_px = np.array(pygame.mouse.get_pos(), dtype=float)
+        mouse_m = mouse_px / PX_PER_METER
+        text_mouse = font.render(f"Mouse: ({mouse_m[0]:.2f}, {mouse_m[1]:.2f}) m", True, (200, 200, 100))
+        screen.blit(text_mouse, (10, HEIGHT - 30))
+
         pygame.display.flip()
         clock.tick(FPS_RENDER)
 
