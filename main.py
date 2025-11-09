@@ -170,22 +170,22 @@ class DamperConstraint(SimulationObject):
             self.p2.force -= 0.5 * force
 
     def draw(self, screen):
-        """Disegna la molla e mostra la sua deformazione."""
+        """Disegna lo smorzatore e mostra la differenza di velocità ai suoi capi."""
         # Conversione posizioni in pixel
         p1_px = self.p1.pos * PX_PER_METER
         p2_px = self.p2.pos * PX_PER_METER
-        # Disegna la linea della molla
+        # Disegna la linea dello smorzatore
         pygame.draw.line(screen, self.color, p1_px.astype(int), p2_px.astype(int), 2)
         
         if DEBUG_DRAWING:
             # Calcola il punto medio in pixel
             mid = (p1_px + p2_px) / 2
-            # Calcola la deformazione (in metri)
-            displacement = np.linalg.norm(self.p2.pos - self.p1.pos) - self.rest_length
+            # Calcola la differenza di velocità (in m/s)
+            vel_diff = np.linalg.norm(self.p2.vel - self.p1.vel)
 
-            # Mostra la deformazione come testo sopra la molla
-            text_surf = pygame.font.SysFont(None, 20).render(f"{displacement:.2f} m", True, (255,255,0))
-            screen.blit(text_surf, mid.astype(int))
+            # Mostra la differenza di velocità come testo sopra lo smorzatore
+            text_surf = pygame.font.SysFont(None, 20).render(f"{vel_diff:.2f} m/s", True, (255,255,0))
+            screen.blit(text_surf, mid.astype(int) - np.array([0,10]))
 
 class SpringConstraint(SimulationObject):
     """Vincolo elastico tra due particelle (molla).
@@ -355,14 +355,17 @@ def main():
     font = pygame.font.SysFont("consolas", 18)
 
     
-    p0 = Particle(pos_m=(4.0, 0.5), vel_m=(0.0, 0.0), static=True)
-    p1 = Particle(pos_m=(4.0, 0.5), vel_m=(0.0, 0.0), static=False)
+    p01 = Particle(pos_m=(3.0, 0.5), vel_m=(0.0, 0.0), static=True)
+    p02 = Particle(pos_m=(5.0, 0.5), vel_m=(0.0, 0.0), static=True)
+    p1 = Particle(pos_m=(4.0, 1.0), vel_m=(0.0, 0.0), static=False)
 
-    s1 = SpringConstraint(p0, p1, k=50.0, rest_length=1.0)
-    d1 = DamperConstraint(p0, p1, beta=-0.9)
-    particles = [p0, p1]
-    springs = [s1]
-    dumpers = [d1]
+    s1 = SpringConstraint(p01, p1, k=50.0, rest_length=1.0)
+    s2 = SpringConstraint(p02, p1, k=50.0, rest_length=1.0)
+    d1 = DamperConstraint(p01, p1, beta=-0.9)
+    d2 = DamperConstraint(p02, p1, beta=-0.9)
+    particles = [p01, p02, p1]
+    springs = [s1, s2]
+    dumpers = [d1, d2]
 
     # Crea vincoli ai bordi (un rettangolo di 7x5 m)
     static_constraints = [
@@ -376,7 +379,7 @@ def main():
     
     
     # Lista per il *disegno*
-    all_objects_to_draw = springs + particles + static_constraints
+    all_objects_to_draw = springs + dumpers + particles + static_constraints 
     
     center_mass = []  # gruppi di particelle per cui calcolare il centro di massa
 
