@@ -11,7 +11,7 @@ DT_PHYSICS = 1/200  # passo fisico (4 ms)
 PX_PER_METER = 100.0  # 100 pixel = 1 metro  ### SCALA ###
 FRICTION_AIR = 0  # coefficiente di attrito dell'aria
 DEBUG_DRAWING = False  # disegna informazioni di debug
-TIME_SCALE = 1 # moltiplicatore del tempo di simulazione
+TIME_SCALE = 0.1 # moltiplicatore del tempo di simulazione
 
 
 # --- CLASSI ---
@@ -122,11 +122,6 @@ class Particle(SimulationObject):
         radius_px = int(self.radius * PX_PER_METER)
         pygame.draw.circle(screen, self.color, pos_px.astype(int), radius_px)
 
-        if DEBUG_DRAWING and not self.static:
-            # mostra posizione e velocità come testo
-            text_surf = pygame.font.SysFont(None, 20).render(f"Pos: ({self.pos[0]:.2f}, {self.pos[1]:.2f}) m | Vel: ({self.vel[0]:.2f}, {self.vel[1]:.2f}) m/s", True, (255,255,255))
-            screen.blit(text_surf, (pos_px[0] + radius_px + 5, pos_px[1] - radius_px - 5))
-
 class DamperConstraint(SimulationObject):
     """Vincolo viscoso tra due particelle (smorzatore).
     Utilizza la posizione predetta per calcolare la forza (più stabile).
@@ -179,7 +174,7 @@ class DamperConstraint(SimulationObject):
         # Disegna la linea dello smorzatore
         pygame.draw.line(screen, self.color, p1_px.astype(int), p2_px.astype(int), 2)
         
-        if DEBUG_DRAWING:
+        if False:
             # Calcola il punto medio in pixel
             mid = (p1_px + p2_px) / 2
             # Calcola la differenza di velocità (in m/s)
@@ -237,7 +232,7 @@ class SpringConstraint(SimulationObject):
         # Disegna la linea della molla
         pygame.draw.line(screen, self.color, p1_px.astype(int), p2_px.astype(int), 2)
         
-        if DEBUG_DRAWING:
+        if False:
             # Calcola il punto medio in pixel
             mid = (p1_px + p2_px) / 2
             # Calcola la deformazione (in metri)
@@ -454,12 +449,12 @@ def main():
     ]
     # connettili tutti insieme
     springs = [
-        SpringConstraint(particles[i], particles[j], k=100.0)
+        SpringConstraint(particles[i], particles[j], k=6000.0)
         for i in range(len(particles))
         for j in range(i+1, len(particles))
     ]
     dumpers = [
-        DamperConstraint(particles[i], particles[j], beta=0.8)
+        DamperConstraint(particles[i], particles[j], beta=15)
         for i in range(len(particles))
         for j in range(i+1, len(particles))
 
@@ -467,10 +462,10 @@ def main():
 
     # Crea vincoli ai bordi (un rettangolo di 7x5 m)
     static_constraints = [
-        Constraint((0.5,0.5), (7.5,0.5), restitution=0.9),
-        Constraint((7.5,0.5), (7.5,5.5), restitution=0.9),
-        Constraint((7.5,5.5), (0.5,5.5), restitution=0.9),
-        Constraint((0.5,5.5), (0.5,0.5), restitution=0.9),
+        Constraint((0.5,0.5), (7.5,0.5), restitution=0),
+        Constraint((7.5,0.5), (7.5,5.5), restitution=0),
+        Constraint((7.5,5.5), (0.5,5.5), restitution=0),
+        Constraint((0.5,5.5), (0.5,0.5), restitution=0),
     ]
 
     
@@ -479,13 +474,15 @@ def main():
     # Lista per il *disegno*
     all_objects_to_draw = springs + dumpers + particles + static_constraints 
     
-    center_mass = []  # gruppi di particelle per cui calcolare il centro di massa
+    center_mass = [particles]  # gruppi di particelle per cui calcolare il centro di massa
 
 
     rendering_running = True
     global simulation_time
     global pos_lock
     global elapsed_time
+    global time_scale
+    global time_scale_lock
 
     # --- Thread di simulazione ---
     stop_event = threading.Event()
@@ -509,6 +506,24 @@ def main():
                     PX_PER_METER /= 1.1  # zoom out
                 PX_PER_METER = max(10, min(1000, PX_PER_METER))  # limiti
             elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_LEFT:
+                    for p in particles:
+                        p.apply_force(np.array([-10.0, 0.0]), time=0.2)
+                elif event.key == pygame.K_RIGHT:
+                    for p in particles:
+                        p.apply_force(np.array([10.0, 0.0]), time=0.2)
+                elif event.key == pygame.K_UP:
+                    for p in particles:
+                        p.apply_force(np.array([0.0, -10.0]), time=0.2)
+                elif event.key == pygame.K_DOWN:
+                    for p in particles:
+                        p.apply_force(np.array([0.0, 10.0]), time=0.2)
+                elif event.key == pygame.K_LCTRL:
+                    with time_scale_lock:
+                        time_scale = max(0.01, time_scale - 0.1)  # rallenta
+                elif event.key == pygame.K_LSHIFT:
+                    with time_scale_lock:
+                        time_scale = min(2.0, time_scale + 0.1)   # accelera
                 if event.key == pygame.K_TAB:
                     global DEBUG_DRAWING
                     DEBUG_DRAWING = not DEBUG_DRAWING
@@ -524,22 +539,28 @@ def main():
             for obj in all_objects_to_draw:
                 obj.draw(screen)
                 pass
-                    
-            draw_force_fields(screen, force_fields)
+            
 
-            # Mostra il centro di massa del sistema (in pixel)
-            for group in center_mass:
-                # Calcola la posizione in metri
-                cm_pos = sum(p.pos * p.mass for p in group) / sum(p.mass for p in group)
+            if DEBUG_DRAWING:
+                draw_force_fields(screen, force_fields)
+
+                # Mostra il centro di massa del sistema (in pixel)
+                for group in center_mass:
+                    # Calcola la posizione in metri
+                    cm_pos = sum(p.pos * p.mass for p in group) / sum(p.mass for p in group)
+                    
+                    # --- MODIFICA QUI ---
+                    
+                    cm_pos_px = cm_pos * PX_PER_METER
+                    
+                    cm_radius_px = int(0.04 * PX_PER_METER)
+                    pygame.draw.circle(screen, (255, 255, 0), cm_pos_px.astype(int), cm_radius_px)
+                    cm_vel = sum(p.vel * p.mass for p in group) / sum(p.mass for p in group)
+                    # scrivi la velocità accanto al centro di massa
+                    text_surf = font.render(f"CM Vel: ({cm_vel[0]:.2f}, {cm_vel[1]:.2f}) m/s", True, (255,255,0))
+                    screen.blit(text_surf, (cm_pos_px[0] + cm_radius_px + 5, cm_pos_px[1] - cm_radius_px - 5))
                 
-                # --- MODIFICA QUI ---
                 
-                cm_pos_px = cm_pos * PX_PER_METER
-                
-                cm_radius_px = int(0.04 * PX_PER_METER)
-                
-                
-                pygame.draw.circle(screen, (255,100,100), cm_pos_px.astype(int), max(1, cm_radius_px))
 
             
 
@@ -553,7 +574,9 @@ def main():
         # Leggi il tempo di simulazione in modo sicuro
         with sim_time_lock:
             sim_time_safe = simulation_time
-        text3 = font.render(f"Physics Step: {DT_PHYSICS*1000:.2f} ms | Sim Time: {elapsed_time*1000:.2f} ms | Sim/Frame: {((render_time/(sim_time_safe*1000)) if sim_time_safe != 0 else 0):.2f}", True, (255, 255, 255))
+        with time_scale_lock:
+            current_time_scale = time_scale
+        text3 = font.render(f"Physics Step: {DT_PHYSICS*1000:.2f} ms | Sim Time: {elapsed_time*1000:.2f} ms ~ {current_time_scale*100:.2f} % | Sim/Frame: {((render_time/(sim_time_safe*1000)) if sim_time_safe != 0 else 0):.2f}", True, (255, 255, 255))
         screen.blit(text2, (10, 30))
         screen.blit(text3, (10, 50))
         screen.blit(text, (10, 10))
