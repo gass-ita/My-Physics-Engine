@@ -7,11 +7,11 @@ import threading
 # --- CONFIG ---
 WIDTH, HEIGHT = 800, 600
 FPS_RENDER = 60
-DT_PHYSICS = 1/200  # passo fisico (4 ms)
+DT_PHYSICS = 1/400  # passo fisico (4 ms)
 PX_PER_METER = 100.0  # 100 pixel = 1 metro  ### SCALA ###
 FRICTION_AIR = 0  # coefficiente di attrito dell'aria
 DEBUG_DRAWING = False  # disegna informazioni di debug
-TIME_SCALE = 0.1 # moltiplicatore del tempo di simulazione
+TIME_SCALE = 1 # moltiplicatore del tempo di simulazione
 
 
 # --- CLASSI ---
@@ -449,12 +449,12 @@ def main():
     ]
     # connettili tutti insieme
     springs = [
-        SpringConstraint(particles[i], particles[j], k=6000.0)
+        SpringConstraint(particles[i], particles[j], k=150.0)
         for i in range(len(particles))
         for j in range(i+1, len(particles))
     ]
     dumpers = [
-        DamperConstraint(particles[i], particles[j], beta=15)
+        DamperConstraint(particles[i], particles[j], beta=0.8)
         for i in range(len(particles))
         for j in range(i+1, len(particles))
 
