@@ -8,7 +8,7 @@ WIDTH, HEIGHT = 800, 600
 FPS_RENDER = 60
 DT_PHYSICS = 1/2000  # passo fisico (10 ms)
 PX_PER_METER = 100.0  # 100 pixel = 1 metro  ### SCALA ###
-FRICTION_AIR = 0.3  # coefficiente di attrito dell'aria
+FRICTION_AIR = 0  # coefficiente di attrito dell'aria
 DEBUG_DRAWING = False  # disegna informazioni di debug
 
 
@@ -47,6 +47,22 @@ class Particle(SimulationObject):
         self.static = static
         self.force_fields = force_fields
         self.force_stack = []  # forze temporanee (non usate in questo esempio)
+
+    def get_predicted_pos(self, dt):
+        """Calcola la posizione predetta solo in base alle forze applicate"""
+        if self.static:
+            return self.pos
+        # 'self.force' contiene GIA' gravità e attrito (dal passo 1 del loop)
+        acc_ext = self.force / self.mass 
+        # Calcola la predizione Verlet solo con le forze esterne
+        return 2.0 * self.pos - self.old_pos + acc_ext * (dt ** 2)
+    
+    def get_predicted_vel(self, dt):
+        """Calcola la velocità predetta solo in base alle forze applicate"""
+        if self.static:
+            return np.zeros(2, dtype=float)
+        pred_pos = self.get_predicted_pos(dt)
+        return (pred_pos - self.old_pos) / dt
 
     def apply_force(self, f, time=0.0):
         """Aggiunge una forza temporanea alla particella [N]."""
@@ -109,6 +125,67 @@ class Particle(SimulationObject):
             text_surf = pygame.font.SysFont(None, 20).render(f"Pos: ({self.pos[0]:.2f}, {self.pos[1]:.2f}) m | Vel: ({self.vel[0]:.2f}, {self.vel[1]:.2f}) m/s", True, (255,255,255))
             screen.blit(text_surf, (pos_px[0] + radius_px + 5, pos_px[1] - radius_px - 5))
 
+class DamperConstraint(SimulationObject):
+    """Vincolo viscoso tra due particelle (smorzatore).
+    Utilizza la posizione predetta per calcolare la forza (più stabile).
+    """
+    def __init__(self, p1, p2, beta=10.0, color=(200,200,255)):
+        self.p1 = p1
+        self.p2 = p2
+        self.beta = beta  # costante di smorzamento [N·s/m]
+        self.color = color
+        
+
+    
+
+    def update(self, dt):
+        """Calcola la forza di smorzamento viscosa basata sulle VELOCITÀ PREDETTE."""
+        if self.p1.static and self.p2.static:
+            return
+
+        # 1 Direzione tra le particelle (basata sulle posizioni predette)
+        pred_pos1 = self.p1.get_predicted_pos(dt)
+        pred_pos2 = self.p2.get_predicted_pos(dt)
+        delta_pos = pred_pos2 - pred_pos1
+        dist = np.linalg.norm(delta_pos)
+        if dist < 1e-8:
+            return
+        direction = delta_pos / dist
+
+        # 2 Velocità relative (predette)
+        pred_vel1 = self.p1.get_predicted_vel(dt)
+        pred_vel2 = self.p2.get_predicted_vel(dt)
+        rel_vel = pred_vel2 - pred_vel1
+
+        # 3 Componente di velocità lungo la direzione della connessione
+        vel_along_axis = np.dot(rel_vel, direction)
+
+        # 4 Forza di damping (si oppone al moto relativo)
+        force = -self.beta * vel_along_axis * direction
+
+        # 5 Applica la forza a ciascuna estremità
+        if not self.p1.static:
+            self.p1.force += 0.5 * force
+        if not self.p2.static:
+            self.p2.force -= 0.5 * force
+
+    def draw(self, screen):
+        """Disegna la molla e mostra la sua deformazione."""
+        # Conversione posizioni in pixel
+        p1_px = self.p1.pos * PX_PER_METER
+        p2_px = self.p2.pos * PX_PER_METER
+        # Disegna la linea della molla
+        pygame.draw.line(screen, self.color, p1_px.astype(int), p2_px.astype(int), 2)
+        
+        if DEBUG_DRAWING:
+            # Calcola il punto medio in pixel
+            mid = (p1_px + p2_px) / 2
+            # Calcola la deformazione (in metri)
+            displacement = np.linalg.norm(self.p2.pos - self.p1.pos) - self.rest_length
+
+            # Mostra la deformazione come testo sopra la molla
+            text_surf = pygame.font.SysFont(None, 20).render(f"{displacement:.2f} m", True, (255,255,0))
+            screen.blit(text_surf, mid.astype(int))
 
 class SpringConstraint(SimulationObject):
     """Vincolo elastico tra due particelle (molla).
@@ -125,21 +202,14 @@ class SpringConstraint(SimulationObject):
         else:
             self.rest_length = rest_length
 
-    def get_predicted_pos(self, p, dt):
-        """Calcola la posizione predetta solo in base alle forze esterne."""
-        if p.static:
-            return p.pos
-        # 'p.force' contiene GIA' gravità e attrito (dal passo 1 del loop)
-        acc_ext = p.force / p.mass 
-        # Calcola la predizione Verlet solo con le forze esterne
-        return 2.0 * p.pos - p.old_pos + acc_ext * (dt ** 2)
+    
 
     def update(self, dt):
         """Calcola la forza elastica basandosi sulla POSIZIONE PREDETTA."""
         
         # 1. Calcola le posizioni predette (dove sarebbero senza le molle)
-        pred_pos1 = self.get_predicted_pos(self.p1, dt)
-        pred_pos2 = self.get_predicted_pos(self.p2, dt)
+        pred_pos1 = self.p1.get_predicted_pos(dt)
+        pred_pos2 = self.p2.get_predicted_pos(dt)
 
         # 2. Calcola la forza in base a quelle posizioni predette
         delta = pred_pos2 - pred_pos1
@@ -289,9 +359,10 @@ def main():
     p1 = Particle(pos_m=(4.0, 0.5), vel_m=(0.0, 0.0), static=False)
 
     s1 = SpringConstraint(p0, p1, k=50.0, rest_length=1.0)
-
+    d1 = DamperConstraint(p0, p1, beta=-0.9)
     particles = [p0, p1]
     springs = [s1]
+    dumpers = [d1]
 
     # Crea vincoli ai bordi (un rettangolo di 7x5 m)
     static_constraints = [
@@ -354,6 +425,9 @@ def main():
             #    (usando le posizioni predette)
             for s in springs:
                 s.update(DT_PHYSICS) # Questo 'update' applica le forze alle particelle
+            
+            for d in dumpers:
+                d.update(DT_PHYSICS)
 
             # 3. Integra le posizioni (usa forze esterne + interne)
             for p in particles:
