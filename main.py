@@ -445,8 +445,12 @@ def main():
     particles = [
         Particle(pos_m=(3.0 + (i%3)*0.60, 1.0 + (i//3)*0.60), vel_m=(0.0, 0.0), radius_m=0.06, color=(255,100,100), mass=0.5, static=False, force_fields=force_fields)
         for i in range(9)
-        
     ]
+
+    
+    
+
+
     # connettili tutti insieme
     springs = [
         SpringConstraint(particles[i], particles[j], k=150.0)
@@ -457,8 +461,9 @@ def main():
         DamperConstraint(particles[i], particles[j], beta=0.8)
         for i in range(len(particles))
         for j in range(i+1, len(particles))
-
     ]
+    
+
 
     # Crea vincoli ai bordi (un rettangolo di 7x5 m)
     static_constraints = [
@@ -586,6 +591,12 @@ def main():
         mouse_m = mouse_px / PX_PER_METER
         text_mouse = font.render(f"Mouse: ({mouse_m[0]:.2f}, {mouse_m[1]:.2f}) m", True, (200, 200, 100))
         screen.blit(text_mouse, (10, HEIGHT - 30))
+        # mostra la scala metrica con una linea in basso a destra
+        scale_start = np.array([WIDTH - PX_PER_METER - 10, HEIGHT - 30], dtype=float)
+        scale_end = scale_start + np.array([PX_PER_METER, 0], dtype=float)
+        pygame.draw.line(screen, (255,255,255), scale_start.astype(int), scale_end.astype(int), 2)
+        text_scale = font.render("1 meter", True, (200, 200, 100))
+        screen.blit(text_scale, (scale_start[0], scale_start[1] - 20))
 
         pygame.display.flip()
         clock.tick(FPS_RENDER)
@@ -617,6 +628,7 @@ def draw_force_fields(screen, ff_list):
                 right_wing = tip - direction * 10 - perp
                 pygame.draw.line(screen, (100,255,100), tip.astype(int), left_wing.astype(int), 1)
                 pygame.draw.line(screen, (100,255,100), tip.astype(int), right_wing.astype(int), 1)
+
 
 
 if __name__ == "__main__":
