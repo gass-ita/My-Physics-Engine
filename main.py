@@ -30,7 +30,7 @@ class Particle(SimulationObject):
     """Particella con massa, posizione e velocità in metri.
     Utilizza l'integrazione Verlet e la separazione delle forze.
     """
-    def __init__(self, pos_m, vel_m, radius_m=0.06, color=(255, 200, 40), mass=1.0, static=False, force_fields=[np.array([0.0, 9.81])]):
+    def __init__(self, pos_m, vel_m, radius_m=0.06, color=(255, 200, 40), mass=1.0, static=False, force_fields=[]):
         # Stato fisico (in metri, m/s, kg)
         self.pos = np.array(pos_m, dtype=float)  # posizione [m]
         self.vel = np.array(vel_m, dtype=float)  # velocità [m/s] (per attrito/collisioni)
@@ -85,7 +85,7 @@ class Particle(SimulationObject):
         self.add_force(-FRICTION_AIR * self.vel)
         # Applica campi di forza (es. gravità)
         for ff in self.force_fields:
-            self.add_force(ff)
+            self.add_force(ff(self))
         
         for f in self.force_stack:
             self.add_force(f[0])  # applica forze temporanee
@@ -354,10 +354,12 @@ def main():
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("consolas", 18)
 
+
+    force_fields = [lambda p: np.array([0.0, 9.81]) * p.mass]
     
     p01 = Particle(pos_m=(3.0, 0.5), vel_m=(0.0, 0.0), static=True)
     p02 = Particle(pos_m=(5.0, 0.5), vel_m=(0.0, 0.0), static=True)
-    p1 = Particle(pos_m=(4.0, 1.0), vel_m=(0.0, 0.0), static=False)
+    p1 = Particle(pos_m=(4.0, 1.0), vel_m=(0.0, 0.0), static=False, force_fields=force_fields)
 
     s1 = SpringConstraint(p01, p1, k=50.0, rest_length=1.0)
     s2 = SpringConstraint(p02, p1, k=50.0, rest_length=1.0)
@@ -453,6 +455,9 @@ def main():
         for obj in all_objects_to_draw:
             obj.draw(screen)
 
+        
+        draw_force_fields(screen, force_fields)
+
         # Mostra il centro di massa del sistema (in pixel)
         for group in center_mass:
             # Calcola la posizione in metri
@@ -484,6 +489,32 @@ def main():
         clock.tick(FPS_RENDER)
 
     pygame.quit()
+
+def draw_force_fields(screen, ff_list):
+    """Disegna i campi di forza come vettori sullo schermo."""
+    step_m = 0.5  # passo in metri
+    for x_m in np.arange(0.0, WIDTH / PX_PER_METER, step_m):
+        for y_m in np.arange(0.0, HEIGHT / PX_PER_METER, step_m):
+            pos = np.array([x_m, y_m])
+            p = Particle(pos_m=pos, vel_m=(0.0, 0.0), static=True)
+            total_force = np.zeros(2, dtype=float)
+            for ff in ff_list:
+                total_force += ff(p)
+            # Disegna il vettore di forza
+            start_px = pos * PX_PER_METER
+            end_px = start_px + (total_force * 3)  # scala per visualizzazione
+            pygame.draw.line(screen, (100,255,100), start_px.astype(int), end_px.astype(int), 1)
+            # Disegna una freccia alla fine
+            direction = end_px - start_px
+            length = np.linalg.norm(direction)
+            if length > 0:
+                direction /= length
+                perp = np.array([-direction[1], direction[0]]) * 5  # larghezza della freccia
+                tip = end_px
+                left_wing = tip - direction * 10 + perp
+                right_wing = tip - direction * 10 - perp
+                pygame.draw.line(screen, (100,255,100), tip.astype(int), left_wing.astype(int), 1)
+                pygame.draw.line(screen, (100,255,100), tip.astype(int), right_wing.astype(int), 1)
 
 
 if __name__ == "__main__":
