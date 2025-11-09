@@ -2,14 +2,16 @@ import pygame
 import numpy as np
 import time
 from abc import ABC, abstractmethod
+import threading
 
 # --- CONFIG ---
 WIDTH, HEIGHT = 800, 600
 FPS_RENDER = 60
-DT_PHYSICS = 1/150  # passo fisico (10 ms)
+DT_PHYSICS = 1/200  # passo fisico (4 ms)
 PX_PER_METER = 100.0  # 100 pixel = 1 metro  ### SCALA ###
 FRICTION_AIR = 0  # coefficiente di attrito dell'aria
 DEBUG_DRAWING = False  # disegna informazioni di debug
+TIME_SCALE = 1 # moltiplicatore del tempo di simulazione
 
 
 # --- CLASSI ---
@@ -161,7 +163,7 @@ class DamperConstraint(SimulationObject):
         vel_along_axis = np.dot(rel_vel, direction)
 
         # 4 Forza di damping (si oppone al moto relativo)
-        force = -self.beta * vel_along_axis * direction
+        force = self.beta * vel_along_axis * direction
 
         # 5 Applica la forza a ciascuna estremità
         if not self.p1.static:
@@ -259,7 +261,7 @@ class Constraint(SimulationObject):
         """I vincoli statici non si aggiornano nel tempo."""
         pass
 
-    def handle_collision(self, particle):
+    def handle_collision(self, particle, dt):
         """Gestisce la collisione tra una particella e il vincolo."""
         seg = self.p2 - self.p1
         seg_len = np.linalg.norm(seg)
@@ -304,7 +306,7 @@ class Constraint(SimulationObject):
         # Aggiorna old_pos per essere coerente
         # con la nuova posizione e la nuova velocità, altrimenti
         # il prossimo step di integrazione "esploderà".
-        particle.old_pos = particle.pos - particle.vel * DT_PHYSICS
+        particle.old_pos = particle.pos - particle.vel * dt
         # -------------------------------------
 
     def draw(self, screen):
@@ -345,6 +347,93 @@ class Constraint(SimulationObject):
 
 
 
+pos_lock = threading.Lock()
+sim_time_lock = threading.Lock()
+time_scale_lock = threading.Lock()
+simulation_time = DT_PHYSICS  # Tempo impiegato nell'ultimo step di simulazione
+time_scale = TIME_SCALE  # 1.0 = 100% (normal speed), 0.5 = 50% (half speed)
+elapsed_time = 0.0  # Tempo totale di simulazione trascorso
+# --- SIMULATION LOOP ---
+
+def simulation_loop(particles, springs, dumpers, static_constraints, stop_event):
+    """Thread separato che esegue la fisica in tempo reale."""
+    
+    # Riferimenti alle variabili globali
+    global DT_PHYSICS, dt, simulation_time, pos_lock, sim_time_lock
+    global time_scale, time_scale_lock, elapsed_time
+    
+    last_time = time.perf_counter()
+    accumulator = 0.0
+
+    # Limite al tempo reale per fotogramma per evitare "salti"
+    # (es. quando si sposta la finestra) e per gestire lo slow-motion
+    # se il PC è troppo lento.
+    MAX_FRAME_TIME = 0.1 # 100 ms
+
+    while not stop_event.is_set():
+        # --- 1. Calcola il tempo reale passato ---
+        now = time.perf_counter()
+        frame_time = now - last_time
+        last_time = now
+
+        # Limita il tempo massimo per fotogramma
+        if frame_time > MAX_FRAME_TIME:
+            frame_time = MAX_FRAME_TIME
+            
+        # --- 2. Applica il fattore Slow-Motion ---
+        # Leggi il fattore di scala in modo sicuro
+        with time_scale_lock:
+            current_time_scale = time_scale
+        
+        # Applica la scala del tempo al tempo reale
+        scaled_frame_time = frame_time * current_time_scale
+        accumulator += scaled_frame_time
+        elapsed_time += scaled_frame_time
+
+        # --- 3. Esegui la fisica (con DT fisso) ---
+        # Esegui la simulazione in passi fissi finché non abbiamo "recuperato"
+        # il tempo accumulato.
+        while accumulator >= DT_PHYSICS:
+            
+            # Il DT della fisica è SEMPRE costante e fisso
+            current_dt = DT_PHYSICS
+            
+            start = time.perf_counter()
+            with pos_lock:
+                # --- SIMULAZIONE FISICA ---
+                
+                # 1. Forze esterne
+                for p in particles:
+                    p.apply_external_forces(current_dt)
+
+                # 2. Interazioni (molle e smorzatori)
+                for s in springs:
+                    s.update(current_dt)
+                for d in dumpers:
+                    d.update(current_dt)
+
+                # 3. Integrazione
+                for p in particles:
+                    p.update(current_dt)
+                    
+                # 4. Collisioni
+                for c in static_constraints:
+                    for p in particles:
+                        c.handle_collision(p, current_dt)
+            
+            end = time.perf_counter()
+            
+            # Aggiorna il tempo di simulazione globale (in secondi)
+            with sim_time_lock: 
+                simulation_time = (end - start)
+            
+            # Sottrai il tempo che abbiamo appena simulato (DT fisso)
+            accumulator -= DT_PHYSICS
+
+
+            
+            
+
 
 # --- MAIN LOOP ---
 def main():
@@ -359,18 +448,18 @@ def main():
     
     # fai un cubo composto da 9  palline 
     particles = [
-        Particle(pos_m=(3.0 + (i%3)*0.60, 1.0 + (i//3)*0.60), vel_m=(0.0, 10.0), radius_m=0.06, color=(255,100,100), mass=0.5, static=False, force_fields=force_fields)
+        Particle(pos_m=(3.0 + (i%3)*0.60, 1.0 + (i//3)*0.60), vel_m=(0.0, 0.0), radius_m=0.06, color=(255,100,100), mass=0.5, static=False, force_fields=force_fields)
         for i in range(9)
         
     ]
     # connettili tutti insieme
     springs = [
-        SpringConstraint(particles[i], particles[j], k=200.0)
+        SpringConstraint(particles[i], particles[j], k=100.0)
         for i in range(len(particles))
         for j in range(i+1, len(particles))
     ]
     dumpers = [
-        DamperConstraint(particles[i], particles[j], beta=-0.01)
+        DamperConstraint(particles[i], particles[j], beta=0.8)
         for i in range(len(particles))
         for j in range(i+1, len(particles))
 
@@ -378,10 +467,10 @@ def main():
 
     # Crea vincoli ai bordi (un rettangolo di 7x5 m)
     static_constraints = [
-        Constraint((0.5,0.5), (7.5,0.5)),
-        Constraint((7.5,0.5), (7.5,5.5),),
-        Constraint((7.5,5.5), (0.5,5.5)),
-        Constraint((0.5,5.5), (0.5,0.5)),
+        Constraint((0.5,0.5), (7.5,0.5), restitution=0.9),
+        Constraint((7.5,0.5), (7.5,5.5), restitution=0.9),
+        Constraint((7.5,5.5), (0.5,5.5), restitution=0.9),
+        Constraint((0.5,5.5), (0.5,0.5), restitution=0.9),
     ]
 
     
@@ -393,16 +482,25 @@ def main():
     center_mass = []  # gruppi di particelle per cui calcolare il centro di massa
 
 
-    running = True
-    accumulator = 0.0
-    last_time = time.perf_counter()
+    rendering_running = True
+    global simulation_time
+    global pos_lock
+    global elapsed_time
 
-    # Loop principale della simulazione
-    while running:
+    # --- Thread di simulazione ---
+    stop_event = threading.Event()
+    sim_thread = threading.Thread(target=simulation_loop,
+                                  args=(particles, springs, dumpers, static_constraints, stop_event),
+                                  daemon=True)
+    sim_thread.start()
+
+    # Rendering loop principale
+    while True:
         # --- GESTIONE EVENTI ---
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                running = False
+                rendering_running = False
+                pygame.quit()
             elif event.type == pygame.MOUSEWHEEL:
                 global PX_PER_METER
                 if event.y > 0:
@@ -411,75 +509,38 @@ def main():
                     PX_PER_METER /= 1.1  # zoom out
                 PX_PER_METER = max(10, min(1000, PX_PER_METER))  # limiti
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_SPACE:
-                    for p in particles:
-                        print( f"Particella at pos {p.pos}, vel {p.vel}" )
-                        p.apply_force(np.array([3.0, 0.0]), time=1) 
                 if event.key == pygame.K_TAB:
                     global DEBUG_DRAWING
                     DEBUG_DRAWING = not DEBUG_DRAWING
 
-        # --- GESTIONE TEMPO ---
-        now = time.perf_counter()
-        frame_time = now - last_time
-        last_time = now
-        accumulator += frame_time
-        simulation_time = 0.0
-        count = 0
-        # --- FISICA (Loop Ristrutturato) ---
-        while accumulator >= DT_PHYSICS:
-            start_simulation_time = time.perf_counter()
-            # 1. Azzera le forze e applica forze ESTERNE (gravità, attrito)
-            for p in particles:
-                p.apply_external_forces(DT_PHYSICS)
-
-            # 2. Calcola e applica forze di interazione (molle)
-            #    (usando le posizioni predette)
-            for s in springs:
-                s.update(DT_PHYSICS) # Questo 'update' applica le forze alle particelle
-            
-            for d in dumpers:
-                d.update(DT_PHYSICS)
-
-            # 3. Integra le posizioni (usa forze esterne + interne)
-            for p in particles:
-                p.update(DT_PHYSICS)
-                
-            # 4. Gestisci collisioni (vincoli statici)
-            
-            for c in static_constraints:
-                for p in particles:
-                    c.handle_collision(p)
-                    
-            # --- AGGIORNA I CONTATORI ---
-            accumulator -= DT_PHYSICS
-            simulation_time = time.perf_counter() - start_simulation_time
-            count += 1
+        if not rendering_running:
+            continue
 
         # --- DISPLAY ---
         screen.fill((20, 20, 30))
         
-        # Disegna tutti gli oggetti
-        for obj in all_objects_to_draw:
-            obj.draw(screen)
-            pass
+        with pos_lock:
+            # Disegna tutti gli oggetti
+            for obj in all_objects_to_draw:
+                obj.draw(screen)
+                pass
+                    
+            draw_force_fields(screen, force_fields)
 
-        
-        # draw_force_fields(screen, force_fields)
+            # Mostra il centro di massa del sistema (in pixel)
+            for group in center_mass:
+                # Calcola la posizione in metri
+                cm_pos = sum(p.pos * p.mass for p in group) / sum(p.mass for p in group)
+                
+                # --- MODIFICA QUI ---
+                
+                cm_pos_px = cm_pos * PX_PER_METER
+                
+                cm_radius_px = int(0.04 * PX_PER_METER)
+                
+                
+                pygame.draw.circle(screen, (255,100,100), cm_pos_px.astype(int), max(1, cm_radius_px))
 
-        # Mostra il centro di massa del sistema (in pixel)
-        for group in center_mass:
-            # Calcola la posizione in metri
-            cm_pos = sum(p.pos * p.mass for p in group) / sum(p.mass for p in group)
-            
-            # --- MODIFICA QUI ---
-            
-            cm_pos_px = cm_pos * PX_PER_METER
-            
-            cm_radius_px = int(0.04 * PX_PER_METER)
-            
-            
-            pygame.draw.circle(screen, (255,100,100), cm_pos_px.astype(int), max(1, cm_radius_px))
             
 
 
@@ -489,7 +550,10 @@ def main():
         render_time = clock.get_time()
         render_fps = clock.get_fps()
         text2 = font.render(f"Render Time: {render_time:.2f} ms | FPS: {render_fps:.2f}", True, (255, 255, 255))
-        text3 = font.render(f"Physics Step: {DT_PHYSICS*1000:.2f} ms | Sim Time: {simulation_time*1000:.2f} ms | Sim/Frame: {count}", True, (255, 255, 255))
+        # Leggi il tempo di simulazione in modo sicuro
+        with sim_time_lock:
+            sim_time_safe = simulation_time
+        text3 = font.render(f"Physics Step: {DT_PHYSICS*1000:.2f} ms | Sim Time: {elapsed_time*1000:.2f} ms | Sim/Frame: {((render_time/(sim_time_safe*1000)) if sim_time_safe != 0 else 0):.2f}", True, (255, 255, 255))
         screen.blit(text2, (10, 30))
         screen.blit(text3, (10, 50))
         screen.blit(text, (10, 10))
