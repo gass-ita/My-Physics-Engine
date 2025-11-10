@@ -7,7 +7,7 @@ import threading
 # --- CONFIG ---
 WIDTH, HEIGHT = 800, 600
 FPS_RENDER = 60
-DT_PHYSICS = 1/400  # passo fisico (4 ms)
+DT_PHYSICS = 1/400  # passo fisico (2.5 ms)
 PX_PER_METER = 100.0  # 100 pixel = 1 metro  ### SCALA ###
 FRICTION_AIR = 0  # coefficiente di attrito dell'aria
 DEBUG_DRAWING = False  # disegna informazioni di debug
@@ -48,23 +48,35 @@ class Particle(SimulationObject):
         self.force = np.zeros(2, dtype=float)
         self.static = static
         self.force_fields = force_fields
-        self.force_stack = []  # forze temporanee (non usate in questo esempio)
+        self.force_stack = []  # forze temporanee (forza, durata rimanente in s)
+        self.predicted_pos_cache = pos_m  # cache per la posizione predetta
+        self.predicted_vel_cache = vel_m  # cache per la velocità predetta
 
-    def get_predicted_pos(self, dt):
+    def update_predicted_pos(self, dt):
         """Calcola la posizione predetta solo in base alle forze applicate"""
         if self.static:
             return self.pos
         # 'self.force' contiene GIA' gravità e attrito (dal passo 1 del loop)
         acc_ext = self.force / self.mass 
         # Calcola la predizione Verlet solo con le forze esterne
-        return 2.0 * self.pos - self.old_pos + acc_ext * (dt ** 2)
+        self.predicted_pos_cache = 2.0 * self.pos - self.old_pos + acc_ext * (dt ** 2)
+        return self.predicted_pos_cache
     
-    def get_predicted_vel(self, dt):
+    def get_predicted_pos(self, dt):
+        """Restituisce la posizione predetta solo in base alle forze applicate"""
+        return self.predicted_pos_cache
+    
+    def update_predicted_vel(self, dt):
         """Calcola la velocità predetta solo in base alle forze applicate"""
         if self.static:
             return np.zeros(2, dtype=float)
         pred_pos = self.get_predicted_pos(dt)
-        return (pred_pos - self.old_pos) / dt
+        self.predicted_vel_cache = (pred_pos - self.old_pos) / dt
+        return self.predicted_vel_cache
+    
+    def get_predicted_vel(self, dt):
+        """Restituisce la velocità predetta solo in base alle forze applicate"""
+        return self.predicted_vel_cache
 
     def apply_force(self, f, time=0.0):
         """Aggiunge una forza temporanea alla particella [N]."""
@@ -85,6 +97,7 @@ class Particle(SimulationObject):
         
         # Applica frizione (usa la velocità calcolata nel passo precedente)
         self.add_force(-FRICTION_AIR * self.vel)
+
         # Applica campi di forza (es. gravità)
         for ff in self.force_fields:
             self.add_force(ff(self))
@@ -220,7 +233,7 @@ class SpringConstraint(SimulationObject):
         # Dividiamo per 2 per applicare metà forza a ciascuna estremità
         force = (self.k * displacement / 2) * direction
         
-        # 3. Applica la forza (che sarà usata da p.integrate() nel passo 3)
+        # 3. Applica la forza (che sarà usata da p.update() nel passo 3)
         self.p1.force += force
         self.p2.force -= force
 
@@ -231,6 +244,37 @@ class SpringConstraint(SimulationObject):
         p2_px = self.p2.pos * PX_PER_METER
         # Disegna la linea della molla
         pygame.draw.line(screen, self.color, p1_px.astype(int), p2_px.astype(int), 2)
+
+        if False: # Disegna una molla a zig-zag
+            p1_px = self.p1.pos * PX_PER_METER
+            p2_px = self.p2.pos * PX_PER_METER
+
+            # Calcola il vettore di connessione e la sua lunghezza
+            delta = p2_px - p1_px
+            dist = np.linalg.norm(delta)
+            if dist < 1e-8:
+                return
+            dir = delta / dist
+
+            # Imposta parametri visivi
+            num_coils = 8               # numero di spire
+            amplitude = 6               # ampiezza (pixel)
+            step = dist / num_coils     # distanza tra le spire
+
+            # Direzioni perpendicolari
+            perp = np.array([-dir[1], dir[0]])
+
+            # Calcola punti del zig-zag
+            points = [p1_px]
+            for i in range(1, num_coils):
+                offset = perp * (amplitude if i % 2 == 0 else -amplitude)
+                point = p1_px + dir * (i * step) + offset
+                points.append(point)
+            points.append(p2_px)
+
+            # Disegna la molla
+            pygame.draw.lines(screen, self.color, False, [p.astype(int) for p in points], 2)
+
         
         if False:
             # Calcola il punto medio in pixel
@@ -400,6 +444,8 @@ def simulation_loop(particles, springs, dumpers, static_constraints, stop_event)
                 # 1. Forze esterne
                 for p in particles:
                     p.apply_external_forces(current_dt)
+                    p.update_predicted_pos(current_dt)
+                    p.update_predicted_vel(current_dt)
 
                 # 2. Interazioni (molle e smorzatori)
                 for s in springs:
@@ -425,6 +471,8 @@ def simulation_loop(particles, springs, dumpers, static_constraints, stop_event)
             # Sottrai il tempo che abbiamo appena simulato (DT fisso)
             accumulator -= DT_PHYSICS
 
+            time.sleep(max(0.0, DT_PHYSICS - (end - start)))  # evita di saturare la CPU
+
 
             
             
@@ -441,26 +489,25 @@ def main():
 
     force_fields = [lambda p: np.array([0.0, 9.81]) * p.mass]
     
-    # fai un cubo composto da 9  palline 
+    # pendolo triplo
     particles = [
-        Particle(pos_m=(3.0 + (i%3)*0.60, 1.0 + (i//3)*0.60), vel_m=(0.0, 0.0), radius_m=0.06, color=(255,100,100), mass=0.5, static=False, force_fields=force_fields)
-        for i in range(9)
+        Particle(pos_m =(3.0, 0.5), vel_m=(0.0, 0.0), mass=1.0, static=True),
+        Particle(pos_m =(3.0, 1.5), vel_m=(0.0, 0.0), mass=1.0, force_fields=force_fields),
+        Particle(pos_m =(3.0, 2.5), vel_m=(0.0, 0.0), mass=1.0, force_fields=force_fields),
+        Particle(pos_m =(3.0, 3.5), vel_m=(0.0, 0.0), mass=1.0, force_fields=force_fields),
     ]
 
     
     
 
 
-    # connettili tutti insieme
+    
     springs = [
-        SpringConstraint(particles[i], particles[j], k=150.0)
-        for i in range(len(particles))
-        for j in range(i+1, len(particles))
+        SpringConstraint(particles[0], particles[1], k=15000.0),
+        SpringConstraint(particles[1], particles[2], k=15000.0),    
     ]
     dumpers = [
-        DamperConstraint(particles[i], particles[j], beta=0.8)
-        for i in range(len(particles))
-        for j in range(i+1, len(particles))
+        
     ]
     
 
@@ -477,7 +524,7 @@ def main():
     
     
     # Lista per il *disegno*
-    all_objects_to_draw = springs + dumpers + particles + static_constraints 
+    all_objects_to_draw = springs + particles + static_constraints 
     
     center_mass = [particles]  # gruppi di particelle per cui calcolare il centro di massa
 
